@@ -48,6 +48,20 @@ jobs:
           if status_old in html:
               html = html.replace(status_old, status_new, 1)
 
+          # Replace the intentionally terse HTTP handling with detailed backend diagnostics.
+          response_old = 'const r=await fetch(endpoint,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({contents})});if(!r.ok)throw new Error(`API ${r.status}`);const data=await r.json(),model=data?.candidates?.[0]?.content;'
+          response_new = '''let r;try{r=await fetch(endpoint,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({contents})})}catch(fetchError){let host=endpoint;try{host=new URL(endpoint).host}catch{}throw new Error(`Network/CORS error contacting ${host}: ${fetchError?.message||fetchError}. Check that the Worker is deployed and allows https://minuteandone.github.io.`)}let raw="",data=null;try{raw=await r.text();data=raw?JSON.parse(raw):null}catch(parseError){if(r.ok)throw new Error(`Backend returned HTTP ${r.status} but the response was not valid JSON: ${raw.slice(0,240)||parseError?.message||"empty response"}`)}if(!r.ok){const detail=(typeof data?.error==="string"?data.error:(data?.error?.message||data?.message||raw||r.statusText||"Unknown backend error"));let hint="";if(r.status===503&&/GEMINI_KEY/i.test(detail))hint=" The Cloudflare Worker cannot see GEMINI_KEY. The secret may exist in the dashboard but not be attached to the deployed production version; edit/re-save the secret and deploy that version.";else if(r.status===503)hint=" The Worker or Gemini is temporarily unavailable. Try again shortly.";else if(r.status===429)hint=" The Gemini API is rate-limiting requests or its quota has been reached. Wait a bit and try again.";else if(r.status===401||r.status===403)hint=" Check the Gemini key, Worker secret binding, and the Worker's allowed-origin/CORS settings.";else if(r.status===400)hint=" The Worker or Gemini rejected the request payload. Check the error text above for the exact validation problem.";else if(r.status>=500)hint=" This is a server-side failure in the Worker or Gemini, not a chat UI error.";throw new Error(`API ${r.status}: ${detail}.${hint}`)}const model=data?.candidates?.[0]?.content;'''
+          if response_old not in html:
+              raise SystemExit("Could not find old Gemini response handling in index.html")
+          html = html.replace(response_old, response_new, 1)
+
+          # Keep the header visibly in an error state after a failure and log diagnostics.
+          turn_old = 'async function agentTurn(m){if(busy)return;busy=true;ui.status.textContent=endpoint?"Working":"Demo";try{endpoint?await realTurn(m):demo(m)}catch(e){use("chat_send",{message:`Agent error: ${e.message}`})}finally{busy=false;ui.status.textContent=endpoint?"Online":"Demo"}}'
+          turn_new = 'async function agentTurn(m){if(busy)return;busy=true;let failed=false;ui.status.textContent=endpoint?"Working":"Demo";try{endpoint?await realTurn(m):demo(m)}catch(e){failed=true;const message=e?.message||String(e);log("backend.error",{endpoint},{message});use("chat_send",{message:`Agent error: ${message}`})}finally{busy=false;ui.status.textContent=endpoint?(failed?"Error":"Online"):"Demo"}}'
+          if turn_old not in html:
+              raise SystemExit("Could not find old agentTurn error handling in index.html")
+          html = html.replace(turn_old, turn_new, 1)
+
           page.write_text(html)
           PY
           touch _site/.nojekyll
